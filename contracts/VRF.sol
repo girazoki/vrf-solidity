@@ -72,6 +72,64 @@ contract VRF is Secp256k1 {
     return uint128(derivedC) == _proof[2];
   }
 
+  /// @dev VRF verification by providing the public key, the message and the VRF proof, with decomposed scalars.
+  /// This function computes several elliptic curve operations which may lead to extensive gas consumption.
+  /// @param _publicKey The public key as an array composed of `[pubKey-x, pubKey-y]`
+  /// @param _proof The VRF proof as an array composed of `[gamma-x, gamma-y, c1, c2, s1, s2]`
+  /// @param _message The message (in bytes) used for computing the VRF
+  /// @return true, if VRF proof is valid
+  function verify(uint256[2] memory _publicKey, uint256[6] memory _proof, bytes memory _message) public pure returns (bool) {
+    // Step 2: Hash to try and increment (outputs a hashed value, a finite EC point in G)
+    uint256[2] memory hPoint;
+    (hPoint[0], hPoint[1]) = hashToTryAndIncrement(_publicKey, _message);
+
+    // Step 3: U = s*B - c*Y (where B is the generator)
+    (uint256 uPointX, uint256 uPointY) = fastEcMulSubMul(
+      [
+        GX,
+        GY,
+        publicKey[0],
+        publicKey[1]
+      ],
+      [
+        proof[4],
+        proof[5],
+        proof[2],
+        proof[3]
+      ]
+    );
+
+    // Step 4: V = s*H - c*Gamma
+    (uint256 vPointX, uint256 vPointY) = fastEcMulSubMul(
+      [
+        hPoint[0],
+        hPoint[1],
+        _proof[0],
+        _proof[1]
+      ],
+      [
+        proof[4],
+        proof[5],
+        proof[2],
+        proof[3]
+      ]
+    );
+
+    // Step 5: derived c from hash points(...)
+    bytes16 derivedC = hashPoints(
+      hPoint[0],
+      hPoint[1],
+      _proof[0],
+      _proof[1],
+      uPointX,
+      uPointY,
+      vPointX,
+      vPointY);
+
+    // Step 6: Check validity c == c'
+    return uint128(derivedC) == _proof[2];
+  }
+
   /// @dev VRF fast verification by providing the public key, the message, the VRF proof and several intermediate elliptic curve points that enable the verification shortcut.
   /// This function leverages the EVM's `ecrecover` precompile to verify elliptic curve multiplications by decreasing the security from 32 to 20 bytes.
   /// Based on the original idea of Vitalik Buterin: https://ethresear.ch/t/you-can-kinda-abuse-ecrecover-to-do-ecmul-in-secp256k1-today/2384/9
@@ -309,36 +367,6 @@ contract VRF is Secp256k1 {
     uint8 prefix = uint8(2 + (_y % 2));
 
     return abi.encodePacked(prefix, _x);
-  }
-
-  /// @dev Substracts two key derivation functionsas `s1*A - s2*B`.
-  /// @param _scalar1 The scalar `s1`
-  /// @param _a1 The `x` coordinate of point `A`
-  /// @param _a2 The `y` coordinate of point `A`
-  /// @param _scalar2 The scalar `s2`
-  /// @param _b1 The `x` coordinate of point `B`
-  /// @param _b2 The `y` coordinate of point `B`
-  /// @return The derived point in affine cooridnates
-  function ecMulSubMul(
-    uint256 _scalar1,
-    uint256 _a1,
-    uint256 _a2,
-    uint256 _scalar2,
-    uint256 _b1,
-    uint256 _b2)
-  internal pure returns (uint256, uint256)
-  {
-    (uint256 m1, uint256 m2) = derivePoint(_scalar1, _a1, _a2);
-    (uint256 n1, uint256 n2) = derivePoint(_scalar2, _b1, _b2);
-    (uint256 r1, uint256 r2) = ecSub(
-      m1,
-      m2,
-      n1,
-      n2,
-      AA,
-      PP);
-
-    return (r1, r2);
   }
 
   /// @dev Verify an Elliptic Curve multiplication of the form `(qx,qy) = scalar*(x,y)` by using the precompiled `ecrecover` function.
